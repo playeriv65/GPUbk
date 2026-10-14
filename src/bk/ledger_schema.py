@@ -1,3 +1,4 @@
+# Modified for the playeriv65 laboratory fork; see NOTICE.
 from __future__ import annotations
 
 from datetime import datetime
@@ -100,6 +101,8 @@ def _validate_reservation(
         reservation.get("expected_memory_mb"),
         f"{path}.expected_memory_mb",
     )
+    for field in ("host_cpus", "host_memory_mb"):
+        _optional_positive_integer(reservation.get(field), f"{path}.{field}")
     operation_id = reservation.get("op_id")
     if operation_id is not None:
         operation_id = _bounded_text(operation_id, f"{path}.op_id", 128)

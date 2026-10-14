@@ -9,9 +9,9 @@ description = "Offline, load-aware GPU booking CLI, curses TUI, worker, and agen
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [{ name = "lzzmm", email = "cortexcyh@gmail.com" }]
-maintainers = [{ name = "lzzmm", email = "cortexcyh@gmail.com" }]
+maintainers = [{ name = "playeriv65", email = "playeriv65@gmail.com" }]
 license = "Apache-2.0"
-license-files = ["LICENSE"]
+license-files = ["LICENSE", "NOTICE"]
 keywords = ["gpu", "scheduler", "booking", "tui", "nvml", "mcp", "agent"]
 classifiers = [
   "Development Status :: 4 - Beta",
@@ -32,10 +32,12 @@ classifiers = [
 dependencies = []
 
 [project.urls]
-Homepage = "https://github.com/lzzmm/GPUbk"
-Repository = "https://github.com/lzzmm/GPUbk"
-Issues = "https://github.com/lzzmm/GPUbk/issues"
-Changelog = "https://github.com/lzzmm/GPUbk/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/playeriv65/GPUbk"
+Repository = "https://github.com/playeriv65/GPUbk"
+Issues = "https://github.com/playeriv65/GPUbk/issues"
+Changelog = "https://github.com/playeriv65/GPUbk/blob/main/CHANGELOG.md"
+Upstream = "https://github.com/lzzmm/GPUbk"
+Companion = "https://github.com/playeriv65/hpc-agent-kit"
 
 [project.optional-dependencies]
 gpu = ["nvidia-ml-py>=12"]
@@ -57,6 +59,12 @@ version = { attr = "bk.__version__" }
 
 [tool.ruff]
 target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+
+[dependency-groups]
+dev = ["ruff==0.17.0", "bandit==1.9.4", "coverage==7.16.2", "build==1.6.1"]
 
 [tool.coverage.run]
 branch = true

@@ -9,9 +9,9 @@ audit-tail response uses `schema_version: "gpubk.audit.v1"`; worker liveness use
 ```bash
 bk agent context --compact
 bk info --compact
-bk agent recommend COUNT DURATION [--mode s|x] [--start ISO] [--gpu 0,1 | --exclude-gpu 7] [--mem 12g] [--share SLOTS] --compact
-bk COUNT DURATION [--mem 12g] [--share SLOTS] --op-id ID --json
-bk agent edit RESERVATION --duration 2h [--share SLOTS] --op-id ID --compact
+bk agent recommend COUNT DURATION [--mode s|x] [--start ISO] [--gpu 0,1 | --exclude-gpu 7] [--mem 12g] [--share SLOTS] [--cpus 8] [--ram 32g] --compact
+bk COUNT DURATION [--mem 12g] [--share SLOTS] [--cpus 8] [--ram 32g] --op-id ID --json
+bk agent edit RESERVATION --duration 2h [--share SLOTS] [--cpus 8] [--ram 32g] --op-id ID --compact
 bk agent cancel RESERVATION --compact
 bk l --json
 bk j --json
@@ -119,6 +119,29 @@ matching `events` in chronological order, and a nullable `warning`. It reads bac
 memory, scans at most 64 MiB, skips malformed records, and never accepts a UID argument.
 
 `share` accepts only an integer from 1 through `shared_capacity_units_per_gpu`. It controls scheduling admission and inferred VRAM, not hardware-enforced compute bandwidth. Explicit `expected_memory` remains the actual per-GPU estimate and is not multiplied by share slots.
+
+## Host Budgets And Shell Visibility
+
+Local JSON CLI and MCP booking, recommendation, and edit operations accept host
+budgets. CLI `--cpus` maps to integer `host_cpus`; `--ram 32g` maps to
+`host_memory_mb=32768`. VRAM remains `--mem` / MCP `expected_memory` per GPU.
+Host budgets are counted once per reservation across all GPUs. Read context
+policy `host_cpu_capacity`, `host_memory_capacity_mb`, `default_host_cpus`, and
+`default_host_memory_mb`; a zero capacity disables that resource's admission
+check. Host budgets participate in conflict checks, queue placement, and
+idempotency. Resource edits are permitted only before the reservation starts.
+These declarations do not create OS CPU or RAM limits.
+
+`bk env --json` uses `gpubk.env.v1` with `uid`, `status`, `gpus`,
+`reservation_ids`, `cuda_visible_devices`, and `error`. It returns the current
+UID's active device union as cached stable UUIDs. Future or expired reservations
+grant no visibility. A stopped broker, stale or invalid identity snapshot, or
+missing UUID produces `status=unavailable`, an empty device string, and exit 2.
+`bk env --bash` prints a safely quoted export; `bk env --value` prints only the
+device string. Neither changes a parent shell by itself. The explicitly sourced
+`bk shell init` hook refreshes startup and prompt state without driver queries.
+An empty `CUDA_VISIBLE_DEVICES` hides GPUs; unsetting it exposes normally
+accessible devices. Visibility is cooperative and UID scoped.
 
 ## MCP Tools
 

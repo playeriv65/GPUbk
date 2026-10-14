@@ -1,3 +1,4 @@
+# Modified for the playeriv65 laboratory fork; see NOTICE.
 import os
 import curses
 import tempfile
@@ -1715,7 +1716,7 @@ class TuiAddPreviewTests(unittest.TestCase):
         self.assertEqual(_date_label(datetime(2030, 1, 1)), "01-01 Tue")
 
     def test_axis_draws_quarter_hour_labels_and_ruler(self):
-        local_tz = datetime.now().astimezone().tzinfo
+        local_tz = datetime(2030, 1, 1).astimezone().tzinfo
         start = datetime(2030, 1, 1, 17, 0, tzinfo=local_tz)
         dates, hours, minutes, ruler = _time_axis_lines(start, start + timedelta(minutes=125), 25)
 
@@ -1730,7 +1731,7 @@ class TuiAddPreviewTests(unittest.TestCase):
         self.assertEqual(ruler[6], "┿")
 
     def test_axis_keeps_first_quarter_tick_when_view_starts_near_it(self):
-        local_tz = datetime.now().astimezone().tzinfo
+        local_tz = datetime(2030, 1, 1).astimezone().tzinfo
         start = datetime(2030, 1, 1, 17, 25, tzinfo=local_tz)
         dates, hours, minutes, ruler = _time_axis_lines(start, start + timedelta(minutes=100), 20)
 
@@ -1741,7 +1742,7 @@ class TuiAddPreviewTests(unittest.TestCase):
         self.assertEqual(ruler[1], "┿")
 
     def test_axis_marks_new_date_and_weekday_at_midnight(self):
-        local_tz = datetime.now().astimezone().tzinfo
+        local_tz = datetime(2030, 1, 1).astimezone().tzinfo
         start = datetime(2030, 1, 1, 23, 30, tzinfo=local_tz)
 
         dates, hours, _minutes, ruler = _time_axis_lines(start, start + timedelta(minutes=120), 24)
@@ -1751,7 +1752,7 @@ class TuiAddPreviewTests(unittest.TestCase):
         self.assertEqual(ruler[6], "╋")
 
     def test_editor_banner_summarizes_mode_count_date_and_duration(self):
-        local_tz = datetime.now().astimezone().tzinfo
+        local_tz = datetime(2030, 1, 1).astimezone().tzinfo
         start = datetime(2030, 1, 1, 17, 30, tzinfo=local_tz)
         preview = AddPreview(start, start + timedelta(minutes=45), (0, 2), 0, MODE_EXCLUSIVE, True, blink=True)
 

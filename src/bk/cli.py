@@ -1,3 +1,4 @@
+# Modified for the playeriv65 laboratory fork; see NOTICE.
 from __future__ import annotations
 
 import argparse
@@ -152,6 +153,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                 return 0
             if head in {"update", "upgrade"}:
                 return _update_command(argv[1:])
+            if head == "server":
+                from .rootless import run_server_cli
+
+                return run_server_cli(argv[1:])
+            if head == "shell":
+                from .shell import run_shell_cli
+
+                return run_shell_cli(argv[1:])
             if head == "skill":
                 return _skill_command(argv[1:])
             if head == "admin":
@@ -177,7 +186,9 @@ def main(argv: Optional[List[str]] = None) -> int:
 
                 return run_node_cli(head[1:], argv[1:])
 
-        config = load_config()
+        config = (
+            load_config(probe_gpu=False) if argv and argv[0] == "env" else load_config()
+        )
         from .broker import ledger_store_for_config
 
         store = ledger_store_for_config(config)
@@ -185,6 +196,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             return _interactive_shell(config, store)
 
         head = argv[0]
+        if head == "env":
+            from .shell import run_env_cli
+
+            return run_env_cli(argv[1:], config, store)
+        if head == "reclaim":
+            return _reclaim_command(argv[1:], config)
         if _looks_like_auto_request(argv):
             return _book_command(argv, MODE_SHARED, config, store)
         if head == "book":
@@ -727,6 +744,10 @@ def _book_command(
     parser.add_argument("--json", action="store_true", help="emit a stable machine-readable result")
     parser.add_argument("-v", "--verbose", action="store_true", help="show placement scores and load history")
     parser.add_argument("-q", "--quiet", action="store_true", help="print only the booking result line")
+    parser.add_argument(
+        "--cpus", type=int, help="declared host CPU cores for this reservation"
+    )
+    parser.add_argument("--ram", help="declared host RAM, e.g. 32g")
     args = parser.parse_args(booking_argv)
 
     preferred = _parse_gpu_list(args.gpu) if args.gpu else None
@@ -752,6 +773,8 @@ def _book_command(
         config,
         store,
         actor,
+        host_cpus=args.cpus,
+        host_memory_mb=parse_memory_mb(args.ram) if args.ram else None,
         count=args.count,
         duration_seconds=duration_seconds,
         start_at=start_at,
@@ -1693,6 +1716,8 @@ def _agent_command(argv: List[str], config: Config, store: LedgerStore) -> int:
         help="GPU indexes to avoid during automatic selection",
     )
     recommend_parser.add_argument("--mem", help="expected memory per GPU, e.g. 12g")
+    recommend_parser.add_argument("--cpus", type=int)
+    recommend_parser.add_argument("--ram", help="declared host RAM, e.g. 32g")
     _add_share_arguments(recommend_parser, config)
     recommend_parser.add_argument("--compact", action="store_true")
     edit_parser = subparsers.add_parser("edit", aliases=["e"], help="idempotently edit this UID's reservation")
@@ -1714,6 +1739,8 @@ def _agent_command(argv: List[str], config: Config, store: LedgerStore) -> int:
     edit_parser.add_argument("--count", type=int, help="new GPU count with automatic selection")
     edit_parser.add_argument("--mode", choices=["s", "shared", "x", "exclusive"])
     edit_parser.add_argument("--mem", help="new expected memory per GPU; use - to clear")
+    edit_parser.add_argument("--cpus", type=int)
+    edit_parser.add_argument("--ram", help="new declared host RAM, before start only")
     _add_share_arguments(edit_parser, config)
     edit_parser.add_argument("--queue", action="store_true", help="allow moving to the next legal slot")
     edit_parser.add_argument("--compact", action="store_true")
@@ -1741,6 +1768,8 @@ def _agent_command(argv: List[str], config: Config, store: LedgerStore) -> int:
                 config,
                 store,
                 actor,
+                host_cpus=args.cpus,
+                host_memory_mb=parse_memory_mb(args.ram) if args.ram else None,
                 count=args.count,
                 duration_seconds=parse_duration_seconds(args.duration),
                 start_at=parse_start(args.start or "now"),
@@ -1770,6 +1799,8 @@ def _agent_command(argv: List[str], config: Config, store: LedgerStore) -> int:
                     args.mode,
                     args.mem,
                     args.share,
+                    args.cpus,
+                    args.ram,
                 ]
             ):
                 raise BookingError("edit requires at least one changed field")
@@ -1788,7 +1819,11 @@ def _agent_command(argv: List[str], config: Config, store: LedgerStore) -> int:
                 store,
                 actor,
                 reservation_id,
-                duration_seconds=parse_duration_seconds(args.duration) if args.duration else None,
+                host_cpus=args.cpus,
+                host_memory_mb=parse_memory_mb(args.ram) if args.ram else None,
+                duration_seconds=parse_duration_seconds(args.duration)
+                if args.duration
+                else None,
                 start_at=parse_start(args.start) if args.start else None,
                 mode=edit_mode,
                 preferred_gpus=_parse_gpu_list(args.gpu) if args.gpu else None,
@@ -1889,6 +1924,27 @@ def _agent_command(argv: List[str], config: Config, store: LedgerStore) -> int:
     return exit_code
 
 
+def _reclaim_command(argv: List[str], config: Config) -> int:
+    from .reclaim import reclaim_no_shows
+
+    parser = argparse.ArgumentParser(prog="bk reclaim")
+    parser.add_argument("--once", action="store_true", required=True)
+    parser.add_argument("--json", action="store_true")
+    parser.parse_args(argv)
+    if config.broker_uid is not None and os.getuid() != config.broker_uid:
+        raise BookingError("reclamation on a shared server requires the broker owner")
+    store = LedgerStore(
+        config.data_dir,
+        config.lock_timeout_seconds,
+        config.backup_keep,
+        config.file_mode,
+        config.dir_mode,
+        config.storage_gid,
+    )
+    print(json.dumps(reclaim_no_shows(store, config, _current_actor()), sort_keys=True))
+    return 0
+
+
 def _skill_command(argv: List[str]) -> int:
     from .skill import default_skill_path, install_skill, skill_text
 
@@ -1897,16 +1953,22 @@ def _skill_command(argv: List[str]) -> int:
     install_parser = subparsers.add_parser("install")
     install_parser.add_argument("--target", type=Path, help="exact destination skill directory")
     install_parser.add_argument("--force", action="store_true")
+    install_parser.add_argument(
+        "--agent", choices=("auto", "codex", "claude"), default="auto"
+    )
     subparsers.add_parser("show")
-    subparsers.add_parser("path")
+    path_parser = subparsers.add_parser("path")
+    path_parser.add_argument(
+        "--agent", choices=("auto", "codex", "claude"), default="auto"
+    )
     args = parser.parse_args(argv)
     if args.action == "show":
         print(skill_text(), end="")
         return 0
     if args.action == "path":
-        print(default_skill_path())
+        print(default_skill_path(args.agent))
         return 0
-    installed = install_skill(args.target, force=args.force)
+    installed = install_skill(args.target, force=args.force, agent=args.agent)
     print(f"installed skill: {installed}")
     return 0
 
@@ -2356,6 +2418,12 @@ def _effective_config(config: Config) -> dict:
     return {
         "data_dir": str(config.data_dir),
         "config_file": str(config.config_path),
+        "rootless": config.rootless,
+        "host_cpu_capacity": config.host_cpu_capacity,
+        "host_memory_capacity_mb": config.host_memory_capacity_mb,
+        "default_host_cpus": config.default_host_cpus,
+        "default_host_memory_mb": config.default_host_memory_mb,
+        "no_show_grace_seconds": config.no_show_grace_seconds,
         "access_mode": config.access_mode,
         "storage_transport": config.storage_transport,
         "broker_socket": str(config.broker_socket)
@@ -2367,9 +2435,7 @@ def _effective_config(config: Config) -> dict:
         "gpu_count": config.gpu_count,
         "enabled_gpus": list(config.enabled_gpus),
         "disabled_gpus": list(config.disabled_gpus),
-        "gpu_priority": {
-            str(gpu): priority for gpu, priority in config.gpu_priority
-        },
+        "gpu_priority": {str(gpu): priority for gpu, priority in config.gpu_priority},
         "slot_minutes": config.slot_minutes,
         "max_shared_users": config.max_shared_users,
         "queue_search_hours": config.queue_search_hours,
@@ -2392,16 +2458,16 @@ def _effective_config(config: Config) -> dict:
         "timeline_hours": config.timeline_hours,
         "require_shared_memory": config.require_shared_memory,
         "shared_memory_reserve_mb": config.shared_memory_reserve_mb,
-        "job_log_dir": str(config.job_log_dir) if config.job_log_dir is not None else None,
+        "job_log_dir": str(config.job_log_dir)
+        if config.job_log_dir is not None
+        else None,
         "job_log_retention_days": config.job_log_retention_days,
         "job_log_max_mb": config.job_log_max_mb,
         "job_log_total_max_mb": config.job_log_total_max_mb,
         "worker_poll_seconds": config.worker_poll_seconds,
         "worker_max_parallel": config.worker_max_parallel,
         "worker_effective_max_parallel": config.effective_worker_max_parallel,
-        "worker_termination_grace_seconds": (
-            config.worker_termination_grace_seconds
-        ),
+        "worker_termination_grace_seconds": (config.worker_termination_grace_seconds),
         "worker_claim_timeout_seconds": config.worker_claim_timeout_seconds,
         "worker_recovery_grace_seconds": config.worker_recovery_grace_seconds,
         "worker_live_guard": config.worker_live_guard,

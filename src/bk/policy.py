@@ -1,3 +1,4 @@
+# Modified for the playeriv65 laboratory fork; see NOTICE.
 from __future__ import annotations
 
 from typing import Any, Callable, Optional, Tuple
@@ -69,6 +70,17 @@ def policy_for_config(config: Config) -> dict:
     }
     if config.storage_gid is not None:
         policy[STORAGE_GID_POLICY_KEY] = config.storage_gid
+    if config.host_cpu_capacity or config.host_memory_capacity_mb:
+        policy.update(
+            host_cpu_capacity=config.host_cpu_capacity,
+            host_memory_capacity_mb=config.host_memory_capacity_mb,
+            default_host_cpus=config.default_host_cpus,
+            default_host_memory_mb=config.default_host_memory_mb,
+        )
+    if config.no_show_grace_seconds:
+        policy["no_show_grace_seconds"] = config.no_show_grace_seconds
+    if config.rootless:
+        policy["rootless"] = True
     return policy
 
 
@@ -92,6 +104,17 @@ def validate_ledger_policy(ledger: dict, config: Config) -> None:
         raise BookingError("ledger policy must be a JSON object")
 
     expected = policy_for_config(config)
+    extension_keys = {
+        "host_cpu_capacity",
+        "host_memory_capacity_mb",
+        "default_host_cpus",
+        "default_host_memory_mb",
+        "no_show_grace_seconds",
+        "rootless",
+    }
+    for key in extension_keys & current.keys():
+        if key not in expected:
+            expected[key] = getattr(config, key)
     mismatches = [
         f"{key}: ledger={current.get(key)!r} local={value!r}"
         for key, value in expected.items()

@@ -1,3 +1,4 @@
+# Modified for the playeriv65 laboratory fork; see NOTICE.
 from __future__ import annotations
 
 import hashlib
@@ -58,7 +59,8 @@ def monitor_configuration_error(config: Config) -> Optional[str]:
         return None
     if config.config_file is None:
         return "shared monitor requires a trusted external or system configuration file"
-    if config.config_owner_uid != 0:
+    trusted_owner = config.broker_uid if config.rootless else 0
+    if config.config_owner_uid != trusted_owner:
         return "shared monitor requires a root-owned configuration file"
     if config.monitor_uid is None:
         return "shared monitor requires monitor_uid in the trusted configuration"
@@ -158,7 +160,54 @@ class UsageMonitor:
         sampled_at = sampled_at or utc_now()
         ledger = self.ledger_store.load()
         warnings = self._maintain_storage(sampled_at)
-        devices = self.snapshot_provider(self.config)
+        reservations = list_active(ledger, sampled_at)
+        quiet = self.config.monitor_pause_on_exclusive and any(
+            item.get("mode") == "exclusive"
+            and parse_iso(item["start_at"]) <= sampled_at < parse_iso(item["end_at"])
+            and (
+                not isinstance(item.get("job"), dict)
+                or item["job"].get("status") != "pending"
+            )
+            for item in reservations
+        )
+        if quiet:
+            # Stable identities remain useful; volatile occupancy is unavailable.
+            # Do not query NVML or nvidia-smi during protected timing windows.
+            devices = [
+                GpuSnapshot(
+                    index=item.index,
+                    name=item.name,
+                    device_uuid=item.device_uuid,
+                    source="identity-cache",
+                    process_telemetry_available=False,
+                    process_utilization_available=False,
+                )
+                for item in self._last_devices
+            ]
+            warnings.append("GPU sampling paused during an exclusive reservation")
+        else:
+            devices = self.snapshot_provider(self.config)
+        if self.config.no_show_grace_seconds:
+            from .identity import current_actor
+            from .reclaim import record_no_show_observations, reclaim_no_shows
+            from .storage import LedgerStore
+
+            # Evidence is written only by the configured monitor, using its own
+            # protected ledger, never a client's constrained job-patch endpoint.
+            owner_store = LedgerStore(
+                self.config.data_dir,
+                self.config.lock_timeout_seconds,
+                self.config.backup_keep,
+                self.config.file_mode,
+                self.config.dir_mode,
+                self.config.storage_gid,
+            )
+            record_no_show_observations(owner_store, self.config, devices, sampled_at)
+            if self.config.broker_uid is None or os.getuid() == self.config.broker_uid:
+                reclaim_no_shows(
+                    owner_store, self.config, current_actor(), now=sampled_at
+                )
+            ledger = self.ledger_store.load()
         process_gap, identity_gap, utilization_gap, stable_identifier_gap = (
             _telemetry_capability_gaps(devices, self.config.gpu_count)
         )
@@ -565,6 +614,7 @@ def run_monitor(
     once: bool = False,
     max_samples: Optional[int] = None,
     verbose: bool = False,
+    stop_event: Optional[threading.Event] = None,
 ) -> int:
     if max_samples is not None and max_samples < 1:
         raise ValueError("--samples must be >= 1")
@@ -595,7 +645,7 @@ def run_monitor(
         ) from exc
     samples = 0
     try:
-        stop_event = threading.Event()
+        stop_event = stop_event if stop_event is not None else threading.Event()
         previous_handlers = _install_signal_handlers(stop_event)
         try:
             monitor = UsageMonitor(config, daemon_store, audit_store, interval_seconds, rollup_seconds)
@@ -810,7 +860,10 @@ def _collector_devices(
             character if 0x20 <= ord(character) < 0x7F else "?"
             for character in source
         )[:64] or "none"
-        device_telemetry = device is not None and source != "none"
+        device_telemetry = device is not None and source not in {
+            "none",
+            "identity-cache",
+        }
         process_telemetry = bool(
             device_telemetry and device is not None and has_process_telemetry(device)
         )
@@ -818,11 +871,11 @@ def _collector_devices(
             {
                 "gpu": gpu,
                 "source": source,
+                "device_uuid": device.device_uuid if device is not None else "",
+                "identity_only": source == "identity-cache",
                 "device_telemetry": device_telemetry,
                 "stable_device_identifier": bool(
-                    device_telemetry
-                    and device is not None
-                    and has_stable_device_identifier(device)
+                    device is not None and has_stable_device_identifier(device)
                 ),
                 "process_telemetry": process_telemetry,
                 "process_utilization": bool(

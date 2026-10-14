@@ -1,3 +1,4 @@
+# Modified for the playeriv65 laboratory fork; see NOTICE.
 from __future__ import annotations
 
 import argparse
@@ -333,11 +334,12 @@ class BrokerServer:
                 f"broker must run as configured service UID {config.broker_uid}; "
                 f"current UID is {os.geteuid()}"
             )
+        trusted_owner = config.broker_uid if config.rootless else 0
         if require_root_config and (
-            config.config_file is None or config.config_owner_uid != 0
+            config.config_file is None or config.config_owner_uid != trusted_owner
         ):
             raise BookingError(
-                "broker requires a trusted root-owned system configuration"
+                "broker requires a trusted root-owned system configuration or an explicitly rootless service-owned configuration"
             )
         self.config = config
         self.socket_path = config.broker_socket
@@ -363,7 +365,7 @@ class BrokerServer:
         )
 
     def serve_forever(self) -> None:
-        self._prepare()
+        self.prepare()
         listener = self._listener
         if listener is None:
             raise BookingError("broker listener was not initialized")
@@ -383,6 +385,11 @@ class BrokerServer:
                 self._pool.submit(self._handle_and_release, connection)
         finally:
             self.close()
+
+    def prepare(self) -> None:
+        """Bind synchronously so a service can report startup failures."""
+        if self._listener is None:
+            self._prepare()
 
     def close(self) -> None:
         with self._close_lock:
@@ -1121,6 +1128,10 @@ def _booking_request_payload(request: BookingRequest) -> dict:
     }
     if request.excluded_gpus is not None:
         payload["excluded_gpus"] = request.excluded_gpus
+    for key in ("host_cpus", "host_memory_mb"):
+        value = getattr(request, key)
+        if value is not None:
+            payload[key] = value
     return payload
 
 
@@ -1141,11 +1152,17 @@ def _edit_request_payload(request: EditRequest) -> dict:
     }
     if request.excluded_gpus is not None:
         payload["excluded_gpus"] = request.excluded_gpus
+    for key in ("host_cpus", "host_memory_mb"):
+        value = getattr(request, key)
+        if value is not None:
+            payload[key] = value
     return payload
 
 
 def _decode_booking_request(payload: dict, actor: Actor) -> BookingRequest:
     allowed = {
+        "host_cpus",
+        "host_memory_mb",
         "count",
         "duration_seconds",
         "start_at",
@@ -1169,6 +1186,10 @@ def _decode_booking_request(payload: dict, actor: Actor) -> BookingRequest:
     )
     return BookingRequest(
         actor=actor,
+        host_cpus=_optional_integer(payload.get("host_cpus"), "host_cpus"),
+        host_memory_mb=_optional_integer(
+            payload.get("host_memory_mb"), "host_memory_mb"
+        ),
         count=_integer(payload.get("count"), "count"),
         duration_seconds=_integer(payload.get("duration_seconds"), "duration_seconds"),
         start_at=parse_iso(_string(payload.get("start_at"), "start_at")),
@@ -1196,6 +1217,8 @@ def _decode_booking_request(payload: dict, actor: Actor) -> BookingRequest:
 
 def _decode_edit_request(payload: dict, actor: Actor) -> EditRequest:
     allowed = {
+        "host_cpus",
+        "host_memory_mb",
         "reservation_id",
         "op_id",
         "start_at",
@@ -1214,6 +1237,10 @@ def _decode_edit_request(payload: dict, actor: Actor) -> EditRequest:
     start_at = payload.get("start_at")
     return EditRequest(
         actor=actor,
+        host_cpus=_optional_integer(payload.get("host_cpus"), "host_cpus"),
+        host_memory_mb=_optional_integer(
+            payload.get("host_memory_mb"), "host_memory_mb"
+        ),
         reservation_id=_string(payload.get("reservation_id"), "reservation_id"),
         op_id=_optional_string(payload.get("op_id"), "op_id"),
         start_at=parse_iso(_string(start_at, "start_at"))

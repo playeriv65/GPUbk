@@ -1,3 +1,4 @@
+# Modified for the playeriv65 laboratory fork; see NOTICE.
 from __future__ import annotations
 
 import difflib
@@ -112,6 +113,13 @@ CONFIG_FILE_KEYS = frozenset(
         "broker_uid",
         "broker_gid",
         "broker_socket_mode",
+        "rootless",
+        "host_cpu_capacity",
+        "host_memory_capacity_mb",
+        "default_host_cpus",
+        "default_host_memory_mb",
+        "no_show_grace_seconds",
+        "monitor_pause_on_exclusive",
     }
 )
 
@@ -168,8 +176,38 @@ class Config:
     disabled_gpus: Tuple[int, ...] = ()
     gpu_priority: Tuple[Tuple[int, int], ...] = ()
     container_attribution_groups: Tuple[str, ...] = ()
+    rootless: bool = False
+    host_cpu_capacity: int = 0
+    host_memory_capacity_mb: int = 0
+    default_host_cpus: int = 1
+    default_host_memory_mb: int = 1024
+    no_show_grace_seconds: int = 0
+    monitor_pause_on_exclusive: bool = False
 
     def __post_init__(self) -> None:
+        for name in (
+            "host_cpu_capacity",
+            "host_memory_capacity_mb",
+            "no_show_grace_seconds",
+        ):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"{name} must be a nonnegative integer")
+        for name in ("default_host_cpus", "default_host_memory_mb"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise ValueError(f"{name} must be a positive integer")
+        if not isinstance(self.rootless, bool):
+            raise ValueError("rootless must be a boolean")
+        if not isinstance(self.monitor_pause_on_exclusive, bool):
+            raise ValueError("monitor_pause_on_exclusive must be a boolean")
+        for capacity_name, default_name in (
+            ("host_cpu_capacity", "default_host_cpus"),
+            ("host_memory_capacity_mb", "default_host_memory_mb"),
+        ):
+            capacity = getattr(self, capacity_name)
+            if capacity and getattr(self, default_name) > capacity:
+                raise ValueError(f"{default_name} exceeds {capacity_name}")
         object.__setattr__(
             self,
             "container_attribution_groups",
@@ -615,7 +653,8 @@ def _read_config_file(
         if required:
             raise FileNotFoundError(f"configured {missing_label} does not exist: {path}")
         return {}, None
-    parent_fd = _open_trusted_config_parent(path.parent)
+    expected_owner = path.lstat().st_uid
+    parent_fd = _open_trusted_config_parent(path.parent, owner_uid=expected_owner)
     try:
         fd = open_existing_regular_at(parent_fd, path.name, path)
     finally:
@@ -623,8 +662,8 @@ def _read_config_file(
     try:
         metadata = os.fstat(fd)
         config_owner_uid = metadata.st_uid
-        if config_owner_uid not in {0, os.getuid()}:
-            raise PermissionError(f"{path} must be owned by root or UID {os.getuid()}")
+        if config_owner_uid != expected_owner:
+            raise PermissionError(f"{path} owner changed during configuration read")
         if stat.S_IMODE(metadata.st_mode) & 0o022:
             raise PermissionError(f"{path} must not be writable by group or other users")
         if metadata.st_size > MAX_CONFIG_FILE_BYTES:
@@ -638,6 +677,14 @@ def _read_config_file(
             os.close(fd)
     if not isinstance(raw, dict):
         raise ValueError(f"{path} must contain a JSON object")
+    if config_owner_uid not in {0, os.getuid()} and not (
+        required
+        and raw.get("rootless") is True
+        and raw.get("broker_uid") == config_owner_uid
+    ):
+        raise PermissionError(f"{path} must be owned by root or UID {os.getuid()}")
+    if raw.get("rootless") is True and raw.get("broker_uid") != config_owner_uid:
+        raise PermissionError("rootless configuration must be owned by its broker UID")
     _validate_config_document(raw, path)
     return raw, config_owner_uid
 
@@ -772,14 +819,26 @@ def _auto_gpu_count() -> int:
     return max(1, detect_gpu_count())
 
 
-def load_config() -> Config:
+def load_config(
+    config_file_override: Optional[Path] = None, *, probe_gpu: bool = True
+) -> Config:
+    if (
+        config_file_override is None
+        and "BK_CONFIG_FILE" not in os.environ
+        and "BK_DATA_DIR" not in os.environ
+    ):
+        from .rootless import connected_config_path
+
+        config_file_override = connected_config_path()
     explicit_data_dir = "BK_DATA_DIR" in os.environ
     data_dir = (
         _path_value(os.environ["BK_DATA_DIR"], "BK_DATA_DIR")
         if explicit_data_dir
         else _default_data_dir()
     )
-    explicit_config_file = "BK_CONFIG_FILE" in os.environ
+    explicit_config_file = (
+        config_file_override is not None or "BK_CONFIG_FILE" in os.environ
+    )
     system_config_file = (
         not explicit_config_file
         and not explicit_data_dir
@@ -787,7 +846,9 @@ def load_config() -> Config:
     )
     if explicit_config_file:
         config_file = _canonical_config_file(
-            _path_value(os.environ["BK_CONFIG_FILE"], "BK_CONFIG_FILE")
+            _path_value(
+                config_file_override or os.environ["BK_CONFIG_FILE"], "BK_CONFIG_FILE"
+            )
         )
     elif system_config_file:
         config_file = _canonical_config_file(SYSTEM_CONFIG_FILE)
@@ -848,14 +909,20 @@ def load_config() -> Config:
         _int_value(raw, "gpu_count", 1, maximum=MAX_GPU_COUNT)
         if "gpu_count" in raw
         else _bounded_detected_gpu_count(_auto_gpu_count())
+        if probe_gpu
+        else 1
     )
 
     return Config(
         data_dir=data_dir,
         config_file=config_file if external_config else None,
         gpu_count=gpu_count,
-        slot_minutes=validate_slot_minutes(raw.get("slot_minutes", DEFAULT_SLOT_MINUTES)),
-        max_shared_users=_int_value(raw, "max_shared_users", 2, maximum=MAX_SHARED_UNITS),
+        slot_minutes=validate_slot_minutes(
+            raw.get("slot_minutes", DEFAULT_SLOT_MINUTES)
+        ),
+        max_shared_users=_int_value(
+            raw, "max_shared_users", 2, maximum=MAX_SHARED_UNITS
+        ),
         queue_search_hours=_int_value(
             raw, "queue_search_hours", 168, maximum=MAX_QUEUE_SEARCH_HOURS
         ),
@@ -871,9 +938,7 @@ def load_config() -> Config:
             30 * 24,
             maximum=MAX_BOOKING_DURATION_HOURS,
         ),
-        booking_blackouts=validate_booking_blackouts(
-            raw.get("booking_blackouts")
-        ),
+        booking_blackouts=validate_booking_blackouts(raw.get("booking_blackouts")),
         ledger_retention_days=_nonnegative_int_value(
             raw, "ledger_retention_days", 90, maximum=MAX_RETENTION_DAYS
         ),
@@ -969,7 +1034,20 @@ def load_config() -> Config:
         monitor_uid=validate_optional_uid(raw.get("monitor_uid"), "monitor_uid"),
         storage_gid=validate_optional_gid(raw.get("storage_gid"), "storage_gid"),
         config_owner_uid=config_owner_uid,
-        file_mode=_mode_value(raw, "file_mode", DEFAULT_PRIVATE_FILE_MODE, directory=False),
+        rootless=_bool_value(raw, "rootless", False),
+        host_cpu_capacity=_nonnegative_int_value(raw, "host_cpu_capacity", 0),
+        host_memory_capacity_mb=_nonnegative_int_value(
+            raw, "host_memory_capacity_mb", 0
+        ),
+        default_host_cpus=_int_value(raw, "default_host_cpus", 1),
+        default_host_memory_mb=_int_value(raw, "default_host_memory_mb", 1024),
+        no_show_grace_seconds=_nonnegative_int_value(raw, "no_show_grace_seconds", 0),
+        monitor_pause_on_exclusive=_bool_value(
+            raw, "monitor_pause_on_exclusive", False
+        ),
+        file_mode=_mode_value(
+            raw, "file_mode", DEFAULT_PRIVATE_FILE_MODE, directory=False
+        ),
         dir_mode=_mode_value(raw, "dir_mode", DEFAULT_PRIVATE_DIR_MODE, directory=True),
         allocator_command=allocator_command,
         allocator_timeout_seconds=_float_value(
@@ -1046,7 +1124,7 @@ def _bounded_detected_gpu_count(value: int) -> int:
     return value
 
 
-def _open_trusted_config_parent(path: Path) -> int:
+def _open_trusted_config_parent(path: Path, owner_uid: Optional[int] = None) -> int:
     absolute = Path(os.path.realpath(os.path.abspath(os.fspath(path))))
     flags = os.O_RDONLY
     for name in ("O_CLOEXEC", "O_DIRECTORY", "O_NOFOLLOW"):
@@ -1054,7 +1132,7 @@ def _open_trusted_config_parent(path: Path) -> int:
     anchor = Path(absolute.anchor)
     fd = os.open(str(anchor), flags)
     try:
-        _validate_trusted_config_directory(fd, anchor)
+        _validate_trusted_config_directory(fd, anchor, owner_uid=owner_uid)
         cursor = anchor
         for component in absolute.parts[1:]:
             if not hasattr(os, "O_NOFOLLOW"):
@@ -1064,7 +1142,9 @@ def _open_trusted_config_parent(path: Path) -> int:
             child_fd = os.open(component, flags, dir_fd=fd)
             try:
                 cursor /= component
-                _validate_trusted_config_directory(child_fd, cursor)
+                _validate_trusted_config_directory(
+                    child_fd, cursor, owner_uid=owner_uid
+                )
             except Exception:
                 os.close(child_fd)
                 raise
@@ -1076,11 +1156,13 @@ def _open_trusted_config_parent(path: Path) -> int:
         raise
 
 
-def _validate_trusted_config_directory(fd: int, path: Path) -> None:
+def _validate_trusted_config_directory(
+    fd: int, path: Path, owner_uid: Optional[int] = None
+) -> None:
     metadata = os.fstat(fd)
     if not stat.S_ISDIR(metadata.st_mode):
         raise NotADirectoryError(f"configuration path component is not a directory: {path}")
-    if metadata.st_uid not in {0, os.getuid()}:
+    if metadata.st_uid not in {0, os.getuid() if owner_uid is None else owner_uid}:
         raise PermissionError(
             f"configuration directory {path} must be owned by root or UID {os.getuid()}"
         )

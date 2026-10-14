@@ -1,3 +1,4 @@
+# Modified for the playeriv65 laboratory fork; see NOTICE.
 from __future__ import annotations
 
 import math
@@ -112,7 +113,20 @@ def validate_collector_document(payload: object) -> dict:
             raise CollectorStatusError(
                 f"devices[{position}].process_telemetry requires device telemetry"
             )
-        if stable_identifier is True and not device_telemetry:
+        identity_only = device.get("identity_only", False)
+        if not isinstance(identity_only, bool):
+            raise CollectorStatusError(
+                f"devices[{position}].identity_only must be boolean"
+            )
+        if identity_only and (
+            device.get("source") != "identity-cache"
+            or device_telemetry
+            or process_telemetry
+        ):
+            raise CollectorStatusError(
+                "identity-only cache must not claim live telemetry"
+            )
+        if stable_identifier is True and not device_telemetry and not identity_only:
             raise CollectorStatusError(
                 f"devices[{position}].stable_device_identifier requires device telemetry"
             )

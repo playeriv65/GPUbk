@@ -1,3 +1,4 @@
+# Modified for the playeriv65 laboratory fork; see NOTICE.
 from __future__ import annotations
 
 import argparse
@@ -72,19 +73,25 @@ class BkMcpBackend:
         exclude_gpus: Optional[List[int]] = None,
         expected_memory: Optional[str] = None,
         share: Optional[int] = None,
+        host_cpus: Optional[int] = None,
+        host_memory_mb: Optional[int] = None,
     ) -> dict:
         normalized_mode = _normalize_mode(mode)
         return recommend_booking(
             self.config,
             self.store,
             self.actor,
+            host_cpus=host_cpus,
+            host_memory_mb=host_memory_mb,
             count=count,
             duration_seconds=parse_duration_seconds(duration),
             start_at=parse_start(start or "now"),
             mode=normalized_mode,
             preferred_gpus=gpus,
             excluded_gpus=exclude_gpus,
-            expected_memory_mb=parse_memory_mb(expected_memory) if expected_memory else None,
+            expected_memory_mb=parse_memory_mb(expected_memory)
+            if expected_memory
+            else None,
             share_units=_mcp_share_units(self.config, normalized_mode, share),
             allow_queue=start is None,
         )
@@ -102,6 +109,8 @@ class BkMcpBackend:
         command: Optional[List[str]] = None,
         working_directory: Optional[str] = None,
         share: Optional[int] = None,
+        host_cpus: Optional[int] = None,
+        host_memory_mb: Optional[int] = None,
     ) -> dict:
         if not operation_id:
             raise BookingError("operation_id is required for retry-safe MCP writes")
@@ -110,13 +119,17 @@ class BkMcpBackend:
             self.config,
             self.store,
             self.actor,
+            host_cpus=host_cpus,
+            host_memory_mb=host_memory_mb,
             count=count,
             duration_seconds=parse_duration_seconds(duration),
             start_at=parse_start(start or "now"),
             mode=normalized_mode,
             preferred_gpus=gpus,
             excluded_gpus=exclude_gpus,
-            expected_memory_mb=parse_memory_mb(expected_memory) if expected_memory else None,
+            expected_memory_mb=parse_memory_mb(expected_memory)
+            if expected_memory
+            else None,
             share_units=_mcp_share_units(self.config, normalized_mode, share),
             allow_queue=start is None,
             operation_id=operation_id,
@@ -192,6 +205,8 @@ class BkMcpBackend:
         expected_memory: Optional[str] = None,
         allow_queue: bool = False,
         share: Optional[int] = None,
+        host_cpus: Optional[int] = None,
+        host_memory_mb: Optional[int] = None,
     ) -> dict:
         if not operation_id:
             raise BookingError("operation_id is required for retry-safe MCP writes")
@@ -206,6 +221,8 @@ class BkMcpBackend:
                 count,
                 expected_memory,
                 share,
+                host_cpus,
+                host_memory_mb,
             )
         ):
             raise BookingError("edit requires at least one changed field")
@@ -221,7 +238,11 @@ class BkMcpBackend:
             self.store,
             self.actor,
             str(reservation["id"]),
-            duration_seconds=parse_duration_seconds(duration) if duration is not None else None,
+            host_cpus=host_cpus,
+            host_memory_mb=host_memory_mb,
+            duration_seconds=parse_duration_seconds(duration)
+            if duration is not None
+            else None,
             start_at=parse_start(start) if start is not None else None,
             mode=normalized_mode,
             preferred_gpus=gpus,
@@ -401,9 +422,13 @@ def create_mcp_server(
         exclude_gpus: Optional[List[int]] = None,
         expected_memory: Optional[str] = None,
         share: Optional[int] = None,
+        host_cpus: Optional[int] = None,
+        host_memory_mb: Optional[int] = None,
     ) -> dict[str, object]:
         """Read-only recommendation. Omit start to allow earliest-slot queueing; explicit start is exact."""
         return api.recommend(
+            host_cpus=host_cpus,
+            host_memory_mb=host_memory_mb,
             count=count,
             duration=duration,
             mode=mode,
@@ -427,9 +452,13 @@ def create_mcp_server(
         command: Optional[List[str]] = None,
         working_directory: Optional[str] = None,
         share: Optional[int] = None,
+        host_cpus: Optional[int] = None,
+        host_memory_mb: Optional[int] = None,
     ) -> dict[str, object]:
         """Create an idempotent booking as this MCP process UID; optionally attach an argv command."""
         return api.book(
+            host_cpus=host_cpus,
+            host_memory_mb=host_memory_mb,
             count=count,
             duration=duration,
             operation_id=operation_id,
@@ -471,9 +500,13 @@ def create_mcp_server(
         expected_memory: Optional[str] = None,
         allow_queue: bool = False,
         share: Optional[int] = None,
+        host_cpus: Optional[int] = None,
+        host_memory_mb: Optional[int] = None,
     ) -> dict[str, object]:
         """Idempotently edit this UID's future booking; queue never repairs past starts."""
         return api.edit(
+            host_cpus=host_cpus,
+            host_memory_mb=host_memory_mb,
             reservation_id=reservation_id,
             operation_id=operation_id,
             duration=duration,

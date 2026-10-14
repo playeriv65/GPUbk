@@ -99,6 +99,11 @@ jobs:
               "bk/cluster_transport.py",
               "bk/cluster_tui.py",
               "bk/cluster_history.py",
+              "bk/rootless.py",
+              "bk/host_resources.py",
+              "bk/reclaim.py",
+              "bk/shell.py",
+              "bk/data/shell/gpubk.bash",
               "bk/data/codex-skill/gpubk/SKILL.md",
               "bk/data/codex-skill/gpubk/agents/openai.yaml",
               "bk/data/codex-skill/gpubk/references/protocol.md",
@@ -108,6 +113,8 @@ jobs:
           missing = required - names
           if missing:
               raise SystemExit(f"wheel missing skill files: {sorted(missing)}")
+          if not any(name.endswith("/licenses/NOTICE") for name in names):
+              raise SystemExit("wheel missing fork attribution NOTICE")
           PY
       - name: Smoke-test zero-dependency wheel
         run: |

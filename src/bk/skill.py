@@ -1,3 +1,4 @@
+# Modified for the playeriv65 laboratory fork; see NOTICE.
 from __future__ import annotations
 
 import os
@@ -6,31 +7,55 @@ import stat
 import uuid
 from importlib import resources
 from pathlib import Path
-from typing import Optional
 
 from .models import BookingError
 from .userdirs import xdg_user_directory
 
-
 SKILL_NAME = "gpubk"
 
 
-def default_skill_path() -> Path:
-    codex_home = xdg_user_directory("CODEX_HOME", ".codex")
-    return codex_home / "skills" / SKILL_NAME
+def default_skill_path(agent: str | None = None) -> Path:
+    """Choose a discoverable client directory without editing instruction files."""
+    if agent is None:
+        return xdg_user_directory("CODEX_HOME", ".codex") / "skills" / SKILL_NAME
+    if agent not in {"auto", "codex", "claude"}:
+        raise BookingError(f"unsupported agent client: {agent}")
+    codex_home = os.environ.get("CODEX_HOME", "")
+    explicit_codex = bool(codex_home and Path(codex_home).is_absolute())
+    home = xdg_user_directory("HOME", "")
+    if agent == "auto":
+        if explicit_codex:
+            agent = "codex"
+        else:
+            codex_present = (home / ".codex").is_dir() or (home / ".agents").is_dir()
+            claude_present = (home / ".claude").is_dir()
+            if codex_present and claude_present:
+                raise BookingError(
+                    "both Codex and Claude directories exist; select --agent codex or --agent claude"
+                )
+            agent = "claude" if claude_present else "codex"
+    if agent == "claude":
+        return home / ".claude" / "skills" / SKILL_NAME
+    if explicit_codex:
+        return xdg_user_directory("CODEX_HOME", ".codex") / "skills" / SKILL_NAME
+    return home / ".agents" / "skills" / SKILL_NAME
 
 
 def skill_text() -> str:
     return _skill_resource().joinpath("SKILL.md").read_text(encoding="utf-8")
 
 
-def install_skill(target: Optional[Path] = None, *, force: bool = False) -> Path:
-    destination = _absolute_skill_path(target or default_skill_path())
+def install_skill(
+    target: Path | None = None, *, force: bool = False, agent: str | None = None
+) -> Path:
+    destination = _absolute_skill_path(target or default_skill_path(agent))
     source = _skill_resource()
     replacing = os.path.lexists(destination)
     if replacing:
         if not force:
-            raise BookingError(f"skill already exists: {destination}; pass --force to replace it")
+            raise BookingError(
+                f"skill already exists: {destination}; pass --force to replace it"
+            )
         _verify_existing_skill(destination)
         _refuse_active_working_tree(destination)
 
@@ -90,7 +115,9 @@ def _refuse_active_working_tree(destination: Path) -> None:
         current = Path.cwd().resolve(strict=True)
         resolved = destination.resolve(strict=True)
     except OSError as exc:
-        raise BookingError("cannot verify the active working directory before replacement") from exc
+        raise BookingError(
+            "cannot verify the active working directory before replacement"
+        ) from exc
     if resolved == current or resolved in current.parents:
         raise BookingError(
             "refusing to replace the current working directory or one of its ancestors; "
@@ -111,7 +138,7 @@ def _restore_replaced_skill(
         ) from install_error
     try:
         os.replace(backup, destination)
-    except BaseException as rollback_error:
+    except BaseException as rollback_error:  # noqa: BLE001 - rollback also handles interrupted installs.
         raise BookingError(
             f"skill replacement and rollback failed ({rollback_error}); "
             f"the previous copy may remain at {backup}"
@@ -145,7 +172,9 @@ def _verify_existing_skill(destination: Path) -> None:
         or marker_metadata is None
         or not stat.S_ISREG(marker_metadata.st_mode)
     ):
-        raise BookingError(f"refusing to replace an unrecognized directory: {destination}")
+        raise BookingError(
+            f"refusing to replace an unrecognized directory: {destination}"
+        )
     header = marker.read_text(encoding="utf-8", errors="replace")[:512]
     if f"name: {SKILL_NAME}" not in header:
         raise BookingError(f"refusing to replace an unrecognized skill: {destination}")

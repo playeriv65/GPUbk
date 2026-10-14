@@ -1,3 +1,4 @@
+# Modified for the playeriv65 laboratory fork; see NOTICE.
 import os
 import tempfile
 import unittest
@@ -9,6 +10,46 @@ from bk.skill import SKILL_NAME, default_skill_path, install_skill, skill_text
 
 
 class BundledSkillTests(unittest.TestCase):
+    def test_client_selection_uses_discoverable_directories(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            with mock.patch.dict(os.environ, {"HOME": tmp}, clear=True):
+                self.assertEqual(
+                    default_skill_path("codex"), home / ".agents/skills/gpubk"
+                )
+                self.assertEqual(
+                    default_skill_path("claude"), home / ".claude/skills/gpubk"
+                )
+                self.assertEqual(
+                    default_skill_path("auto"), home / ".agents/skills/gpubk"
+                )
+                (home / ".claude").mkdir()
+                self.assertEqual(
+                    default_skill_path("auto"), home / ".claude/skills/gpubk"
+                )
+                (home / ".codex").mkdir()
+                with self.assertRaisesRegex(BookingError, "both Codex and Claude"):
+                    default_skill_path("auto")
+                os.environ["CODEX_HOME"] = str(home / "custom-codex")
+                self.assertEqual(
+                    default_skill_path("auto"), home / "custom-codex/skills/gpubk"
+                )
+
+    def test_install_changes_only_skill_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            (home / ".claude").mkdir()
+            instructions = home / ".claude/CLAUDE.md"
+            instructions.write_text("Keep these instructions.\n", encoding="utf-8")
+            with mock.patch.dict(os.environ, {"HOME": tmp}, clear=True):
+                installed = install_skill(agent="claude")
+            self.assertEqual(installed, home / ".claude/skills/gpubk")
+            self.assertEqual(
+                instructions.read_text(encoding="utf-8"), "Keep these instructions.\n"
+            )
+            self.assertFalse((home / ".codex/AGENTS.md").exists())
+            self.assertFalse((home / ".agents/AGENTS.md").exists())
+
     def test_default_path_uses_only_an_absolute_codex_home(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -140,9 +181,11 @@ class BundledSkillTests(unittest.TestCase):
                     raise OSError("simulated replacement failure")
                 return real_replace(source, target)
 
-            with mock.patch("bk.skill.os.replace", side_effect=fail_new_skill):
-                with self.assertRaisesRegex(OSError, "simulated replacement failure"):
-                    install_skill(destination, force=True)
+            with (
+                mock.patch("bk.skill.os.replace", side_effect=fail_new_skill),
+                self.assertRaisesRegex(OSError, "simulated replacement failure"),
+            ):
+                install_skill(destination, force=True)
 
             self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep")
             self.assertEqual(list(destination.parent.glob(".gpubk.*")), [])

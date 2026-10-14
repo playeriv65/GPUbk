@@ -2,6 +2,19 @@
 
 All notable changes are documented here. The project follows Semantic Versioning once a public release is published.
 
+## Laboratory fork - 2026-10-14
+
+- Add an explicit rootless broker/monitor service and a protected per-user client
+  connection pointer, retaining Linux peer-credential authorization.
+- Check declared host CPU and RAM budgets atomically across bookings, edits,
+  renewals and queued recommendations.
+- Install client-specific Agent Skills without changing user instruction files.
+- Refresh cooperative Bash GPU visibility from current reservations and cached
+  device UUIDs, with empty visibility on missing or untrusted state.
+- Reclaim never-started bookings only after a full trustworthy absence window;
+  retain uncertain or previously started work and never signal GPU processes.
+- Pause monitor driver sampling during protected exclusive windows.
+
 ## 0.2.8 - 2026-07-21
 
 - Accept safe multiline administrator announcements while continuing to reject NUL,

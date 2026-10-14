@@ -1,3 +1,4 @@
+# Modified for the playeriv65 laboratory fork; see NOTICE.
 import hashlib
 import re
 import runpy
@@ -46,8 +47,10 @@ class ReleaseConfigurationTests(unittest.TestCase):
             str(path.relative_to(ROOT))
             for path in files
             if legacy
-            in path.read_text(encoding="utf-8").replace(
-                "github.com/lzzmm/GPUbk", "github.com/lzzmm/GPUBK"
+            in re.sub(
+                r"github\.com/([^/\s]+)/GPUbk",
+                r"github.com/\1/GPUBK",
+                path.read_text(encoding="utf-8"),
             )
         ]
         self.assertEqual(offenders, [])
@@ -395,11 +398,17 @@ class ReleaseConfigurationTests(unittest.TestCase):
         pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
 
         self.assertIn('authors = [{ name = "lzzmm", email = "cortexcyh@gmail.com" }]', pyproject)
-        self.assertIn('maintainers = [{ name = "lzzmm", email = "cortexcyh@gmail.com" }]', pyproject)
+        self.assertIn(
+            'maintainers = [{ name = "playeriv65", email = "playeriv65@gmail.com" }]',
+            pyproject,
+        )
         self.assertRegex(pyproject, r'(?m)^license = "Apache-2\.0"$')
-        self.assertRegex(pyproject, r'(?m)^license-files = \["LICENSE"\]$')
-        self.assertIn('Repository = "https://github.com/lzzmm/GPUbk"', pyproject)
-        self.assertIn('Issues = "https://github.com/lzzmm/GPUbk/issues"', pyproject)
+        self.assertRegex(pyproject, r'(?m)^license-files = \["LICENSE", "NOTICE"\]$')
+        self.assertIn('Repository = "https://github.com/playeriv65/GPUbk"', pyproject)
+        self.assertIn(
+            'Issues = "https://github.com/playeriv65/GPUbk/issues"', pyproject
+        )
+        self.assertIn('Upstream = "https://github.com/lzzmm/GPUbk"', pyproject)
 
         license_digest = hashlib.sha256((ROOT / "LICENSE").read_bytes()).hexdigest()
         self.assertEqual(license_digest, APACHE_2_NORMALIZED_SHA256)

@@ -1,3 +1,4 @@
+# Modified for the playeriv65 laboratory fork; see NOTICE.
 from __future__ import annotations
 
 import hashlib
@@ -17,6 +18,7 @@ from .granularity import (
     slot_phrase,
 )
 from .ledger_schema import MAX_EDIT_OPERATIONS_PER_RESERVATION
+from .host_resources import normalize_host_budget, host_budget_conflict
 from .models import (
     MODE_EXCLUSIVE,
     MODE_SHARED,
@@ -64,6 +66,7 @@ def add_booking(
     if job_metadata is None and job_digest_aliases:
         raise BookingError("legacy job digest aliases require job metadata")
     op_id = _normalize_operation_id(request.op_id)
+    budget = normalize_host_budget(config, request.host_cpus, request.host_memory_mb)
     expected_memory_mb = _normalize_expected_memory(request.expected_memory_mb)
     share_units = _request_share_units(request.mode, request.share_units, config.max_shared_users)
     if request.mode == MODE_SHARED and config.require_shared_memory and expected_memory_mb is None:
@@ -130,7 +133,9 @@ def add_booking(
                     share_units,
                     job_digest_aliases,
                 )
-                if duplicate is not None:
+                if duplicate is not None and all(
+                    duplicate.get(k) == v for k, v in budget.items()
+                ):
                     return ledger, BookingResult(duplicate, False, "duplicate request ignored"), [], changed
         else:
             if not request.allow_queue:
@@ -146,7 +151,9 @@ def add_booking(
                     share_units,
                     job_digest_aliases,
                 )
-                if duplicate is not None:
+                if duplicate is not None and all(
+                    duplicate.get(k) == v for k, v in budget.items()
+                ):
                     return ledger, BookingResult(duplicate, False, "duplicate request ignored"), [], changed
 
         current_slice_start = floor_to_slot(now, config.slot_minutes)
@@ -172,9 +179,14 @@ def add_booking(
             memory_capacities,
             share_units,
             excluded,
+            host_budget=budget,
         )
         if slot is None:
-            reason = _availability_failure_message(ledger, config, request, start, end, preferred)
+            reason = host_budget_conflict(
+                ledger, config, start, end, budget
+            ) or _availability_failure_message(
+                ledger, config, request, start, end, preferred
+            )
             raise BookingError(reason)
         scheduled_start, gpus = slot
         scheduled_end = scheduled_start + duration
@@ -196,6 +208,7 @@ def add_booking(
             "created_at": to_iso(now),
             "updated_at": to_iso(now),
         }
+        reservation.update(budget)
         if expected_memory_mb is not None:
             reservation["expected_memory_mb"] = expected_memory_mb
         if request.mode == MODE_SHARED:
@@ -244,6 +257,7 @@ def find_applied_create(
     )
     if job_intent is None and normalized_job_digest_aliases:
         raise BookingError("legacy job digest aliases require job metadata")
+    normalize_host_budget(config, request.host_cpus, request.host_memory_mb)
     expected_memory_mb = _normalize_expected_memory(request.expected_memory_mb)
     share_units = _request_share_units(
         request.mode,
@@ -523,6 +537,15 @@ def edit_booking(
             )
         memory_capacities = _normalize_memory_capacities(request.gpu_memory_capacity_mb, config)
 
+        budget = normalize_host_budget(
+            config,
+            request.host_cpus
+            if request.host_cpus is not None
+            else reservation.get("host_cpus"),
+            request.host_memory_mb
+            if request.host_memory_mb is not None
+            else reservation.get("host_memory_mb"),
+        )
         current_start = parse_iso(reservation["start_at"])
         current_end = parse_iso(reservation["end_at"])
         before = _reservation_edit_state(reservation)
@@ -614,8 +637,18 @@ def edit_booking(
             memory_capacities,
             share_units,
             excluded,
+            host_budget=budget,
         )
         if slot is None:
+            host_reason = host_budget_conflict(
+                shadow_ledger,
+                config,
+                requested_start,
+                requested_start + duration,
+                budget,
+            )
+            if host_reason:
+                raise BookingError(host_reason)
             reason_request = BookingRequest(
                 actor=request.actor,
                 count=count,
@@ -652,6 +685,7 @@ def edit_booking(
             reservation["share_units"] = share_units
         else:
             reservation.pop("share_units", None)
+        reservation.update(budget)
         history_op_id = _append_edit_history(
             reservation,
             request.actor,
@@ -696,6 +730,8 @@ def _edit_started_reservation(
         or request.update_expected_memory
         or request.update_share_units
         or request.allow_queue
+        or request.host_cpus is not None
+        or request.host_memory_mb is not None
     )
     if immutable_changes:
         raise BookingError(
@@ -758,8 +794,24 @@ def _edit_started_reservation(
                 else 1
             ),
             (),
+            host_budget=normalize_host_budget(
+                config, reservation.get("host_cpus"), reservation.get("host_memory_mb")
+            ),
         )
         if slot is None:
+            host_reason = host_budget_conflict(
+                shadow_ledger,
+                config,
+                future_start,
+                new_end,
+                normalize_host_budget(
+                    config,
+                    reservation.get("host_cpus"),
+                    reservation.get("host_memory_mb"),
+                ),
+            )
+            if host_reason:
+                raise BookingError(host_reason)
             raise BookingError(
                 "cannot extend this reservation because its GPUs are unavailable "
                 "during the requested future interval"
@@ -792,6 +844,11 @@ def _reservation_edit_state(reservation: dict) -> dict:
         "mode": reservation.get("mode"),
         "start_at": reservation.get("start_at"),
         "end_at": reservation.get("end_at"),
+        **{
+            key: reservation[key]
+            for key in ("host_cpus", "host_memory_mb")
+            if key in reservation
+        },
         "expected_memory_mb": reservation.get("expected_memory_mb"),
         "share_units": reservation.get("share_units"),
     }
@@ -1034,6 +1091,8 @@ def find_earliest_slot(
     gpu_memory_capacity_mb: Optional[Dict[int, int]] = None,
     share_units: int = 1,
     excluded_gpus: Optional[Sequence[int]] = None,
+    *,
+    host_budget: Optional[dict] = None,
 ) -> Optional[Tuple[datetime, List[int]]]:
     validate_ledger_policy(ledger, config)
     now = utc_now()
@@ -1063,6 +1122,14 @@ def find_earliest_slot(
         candidate_starts = [earliest_start]
 
     for candidate_start in candidate_starts:
+        if host_budget_conflict(
+            ledger,
+            config,
+            candidate_start,
+            candidate_start + duration,
+            host_budget or {},
+        ):
+            continue
         if booking_policy_conflict(
             config,
             candidate_start,
@@ -2031,12 +2098,24 @@ def _create_operation_signature(
             "duration_seconds": request.duration_seconds,
             "start_at": None if request.allow_queue else to_iso(start),
             "mode": request.mode,
-            "preferred_gpus": list(preferred_gpus) if preferred_gpus is not None else None,
+            "preferred_gpus": list(preferred_gpus)
+            if preferred_gpus is not None
+            else None,
             "allow_queue": request.allow_queue,
             "expected_memory_mb": expected_memory_mb,
             "share_units": share_units if request.mode == MODE_SHARED else None,
             "excluded_gpus": list(excluded_gpus),
-            "job_summary": job_metadata.get("summary") if job_metadata is not None else None,
+            "job_summary": job_metadata.get("summary")
+            if job_metadata is not None
+            else None,
+            **{
+                key: value
+                for key, value in (
+                    ("host_cpus", request.host_cpus),
+                    ("host_memory_mb", request.host_memory_mb),
+                )
+                if value is not None
+            },
         },
     )
 
@@ -2047,7 +2126,9 @@ def _edit_operation_signature(request: EditRequest) -> str:
         "edit",
         {
             "reservation_id": request.reservation_id,
-            "start_at": to_iso(request.start_at) if request.start_at is not None else None,
+            "start_at": to_iso(request.start_at)
+            if request.start_at is not None
+            else None,
             "duration_seconds": request.duration_seconds,
             "mode": request.mode,
             "preferred_gpus": preferred,
@@ -2057,6 +2138,14 @@ def _edit_operation_signature(request: EditRequest) -> str:
             "update_expected_memory": request.update_expected_memory,
             "share_units": request.share_units,
             "update_share_units": request.update_share_units,
+            **{
+                key: value
+                for key, value in (
+                    ("host_cpus", request.host_cpus),
+                    ("host_memory_mb", request.host_memory_mb),
+                )
+                if value is not None
+            },
             "excluded_gpus": sorted(set(request.excluded_gpus or [])),
         },
     )

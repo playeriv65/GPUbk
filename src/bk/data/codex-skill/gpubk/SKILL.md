@@ -1,11 +1,56 @@
 ---
 name: gpubk
-description: Inspect, recommend, create, edit, cancel, and monitor GPU reservations with GPUBK. Use when an agent needs to plan a GPU experiment, choose shared versus exclusive access, account for current and recent GPU load or expected VRAM, attach a command for scheduled execution, inspect job status, or safely automate GPUBK through its JSON CLI or MCP tools.
+description: Reserve, release, and query shared-server GPUs with GPUBK, including requests such as "预约 GPU1", "申请显卡", or "释放 GPU". Use for GPU experiment planning, shared or exclusive performance tests, expected VRAM budgets, scheduled commands, and reservation or job status through JSON CLI or MCP.
 ---
 
 # GPUBK
 
 Use GPUBK's structured interfaces. Do not scrape the TUI or human-readable tables.
+
+## Interpret The User's Request
+
+An explicit request to reserve, extend, or release a GPU authorizes that operation;
+do not ask for the same approval again. Resolve necessary missing parameters from
+the conversation and the configured policy, and ask only when neither provides
+them. Keep current reservation state in the service, not in remembered chat facts.
+
+`GPU1` means physical device index **1**, not a request for one arbitrary GPU.
+Pass `--gpu 1` (or `gpus=[1]` with MCP). The positional `1` in `bk 1 1h`
+is a GPU **count**. Before booking a requested index, inspect context and recommend
+that exact index; report a conflict rather than silently selecting another device.
+Use exclusive mode for benchmark and performance measurements.
+
+Declare host CPU and RAM budgets when the workload needs them: `--cpus 8
+--ram 32g` on booking, `bk agent recommend`, and `bk agent edit`. In MCP,
+use `host_cpus=8` and `host_memory_mb=32768`. Keep the same budgets in
+recommendation and submission. Read the configured host capacities and defaults
+from context; these are admission budgets, not operating-system resource limits.
+`--mem` remains the per-GPU VRAM budget and is separate from host `--ram`.
+Change host budgets only before the reservation starts; once started, only its
+end time may change.
+
+For example, after resolving duration and shared memory budget:
+
+```bash
+bk agent context --compact
+bk agent recommend 1 1h --gpu 1 --mode shared --mem 12g --compact
+bk 1 1h --gpu 1 --mem 12g --op-id <stable-id> --json
+```
+
+For a workload needing eight CPU cores and 32 GiB of host RAM (the edit applies
+only before its start):
+
+```bash
+bk agent recommend 1 1h --gpu 1 --mem 12g --cpus 8 --ram 32g --compact
+bk 1 1h --gpu 1 --mem 12g --cpus 8 --ram 32g --op-id <stable-id> --json
+bk agent edit <short-id> --cpus 4 --ram 16g --op-id <stable-edit-id> --compact
+```
+
+Before running a workload, confirm that its reservation has started and remains
+valid. Prefer the GPUBK command launcher. For an explicitly sourced Bash hook,
+`bk_gpu_refresh` updates the current shell; `bk env --bash` prints an export but
+cannot change a parent shell by itself. Release or expiry sets visibility to an
+empty string: never unset `CUDA_VISIBLE_DEVICES`, which normally exposes all GPUs.
 
 ## Choose An Interface
 
@@ -13,14 +58,14 @@ Prefer GPUBK MCP tools when available:
 
 1. Call `get_gpu_context` for policy and live state.
 2. Call `recommend_gpu_booking` before any write.
-3. Call `create_gpu_booking` only when the user requested or approved the reservation.
-4. Use `edit_my_gpu_booking` with a new stable operation ID when the user approves a change.
+3. Call `create_gpu_booking` when the user requested or already approved the reservation.
+4. Use `edit_my_gpu_booking` with a new stable operation ID for a requested or approved change.
 5. Use `get_my_gpu_usage` for current-UID historical utilization; do not infer it from reservation duration.
 
 If `get_gpu_cluster_context` is present, a trusted catalog is configured. For a
 cross-node request, call `check_gpu_cluster_readiness` once in the session (with
 `require_jobs=true` before scheduled launch), use `recommend_cluster_gpu_booking`, then
-`create_cluster_gpu_booking` after approval. Preserve the returned node name in
+`create_cluster_gpu_booking` for the requested reservation. Preserve the returned node name in
 `NODE/ID`; use that qualified ID with `edit_my_cluster_gpu_booking` or
 `cancel_my_cluster_gpu_booking`. Reuse the same operation ID only for an exact retry
 and never reroute an uncertain write.

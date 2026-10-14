@@ -1,3 +1,4 @@
+# Modified for the playeriv65 laboratory fork; see NOTICE.
 import json
 import os
 import sys
@@ -60,13 +61,17 @@ class ConfigTests(unittest.TestCase):
 
     def test_generic_default_uses_xdg_data_home_not_lab_specific_path(self):
         with tempfile.TemporaryDirectory() as tmp:
-            with mock.patch.dict(
-                "os.environ",
-                {"XDG_DATA_HOME": tmp},
-                clear=True,
-            ), mock.patch(
-                "bk.config.SYSTEM_CONFIG_FILE",
-                Path(tmp) / "missing-system-config.json",
+            with (
+                mock.patch("bk.config._auto_gpu_count", return_value=1),
+                mock.patch.dict(
+                    "os.environ",
+                    {"XDG_DATA_HOME": tmp},
+                    clear=True,
+                ),
+                mock.patch(
+                    "bk.config.SYSTEM_CONFIG_FILE",
+                    Path(tmp) / "missing-system-config.json",
+                ),
             ):
                 config = load_config()
 
@@ -160,6 +165,7 @@ class ConfigTests(unittest.TestCase):
             root = Path(tmp)
             config_dir = root / "etc" / "gpubk"
             config_dir.mkdir(parents=True, mode=0o700)
+            config_dir.parent.chmod(0o755)
             config_path = config_dir / "config.json"
             data_dir = root / "shared-data"
             config_path.write_text(
@@ -406,7 +412,7 @@ class ConfigTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             data_dir = root / "selected-data"
-            data_dir.mkdir()
+            data_dir.mkdir(mode=0o700)
             config_path = data_dir / "config.json"
             config_path.write_text(
                 json.dumps(
@@ -616,18 +622,21 @@ class ConfigTests(unittest.TestCase):
 
     def test_job_log_limits_can_be_overridden_or_disabled(self):
         with tempfile.TemporaryDirectory() as tmp:
-            with mock.patch.dict(
-                "os.environ",
-                {
-                    "BK_DATA_DIR": tmp,
-                    "BK_JOB_LOG_RETENTION_DAYS": "0",
-                    "BK_JOB_LOG_MAX_MB": "8",
-                    "BK_JOB_LOG_TOTAL_MAX_MB": "512",
-                    "BK_WORKER_MAX_PARALLEL": "3",
-                    "BK_WORKER_TERMINATION_GRACE_SECONDS": "2.5",
-                    "BK_WORKER_RECOVERY_GRACE_SECONDS": "0.25",
-                },
-                clear=True,
+            with (
+                mock.patch("bk.config._auto_gpu_count", return_value=1),
+                mock.patch.dict(
+                    "os.environ",
+                    {
+                        "BK_DATA_DIR": tmp,
+                        "BK_JOB_LOG_RETENTION_DAYS": "0",
+                        "BK_JOB_LOG_MAX_MB": "8",
+                        "BK_JOB_LOG_TOTAL_MAX_MB": "512",
+                        "BK_WORKER_MAX_PARALLEL": "3",
+                        "BK_WORKER_TERMINATION_GRACE_SECONDS": "2.5",
+                        "BK_WORKER_RECOVERY_GRACE_SECONDS": "0.25",
+                    },
+                    clear=True,
+                ),
             ):
                 config = load_config()
 

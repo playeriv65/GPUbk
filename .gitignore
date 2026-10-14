@@ -8,3 +8,12 @@ build/
 dist/
 acceptance-reports/
 .DS_Store
+runs/
+.ruff_cache/
+*.sqlite*
+*.db
+config.local.json
+simulation.local.json
+.env
+.env.*
+!.env.example

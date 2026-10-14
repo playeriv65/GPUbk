@@ -1,3 +1,4 @@
+# Modified for the playeriv65 laboratory fork; see NOTICE.
 from __future__ import annotations
 
 import os
@@ -12,6 +13,7 @@ from .allocator import AllocatorDecision, apply_external_allocator
 from .config import Config
 from .granularity import floor_to_slot, is_slot_aligned, slot_phrase
 from .ledger_schema import MAX_EDIT_OPERATIONS_PER_RESERVATION
+from .host_resources import normalize_host_budget
 from .models import (
     MODE_EXCLUSIVE,
     MODE_SHARED,
@@ -95,6 +97,8 @@ def submit_booking(
     command_argv: Optional[List[str]] = None,
     working_directory: Optional[str] = None,
     advice: Optional[GpuAdvice] = None,
+    host_cpus: Optional[int] = None,
+    host_memory_mb: Optional[int] = None,
 ) -> BookingSubmission:
     generated_at = utc_now()
     effective_start = (
@@ -141,13 +145,13 @@ def submit_booking(
         config,
         BookingRequest(
             actor=actor,
+            host_cpus=host_cpus,
+            host_memory_mb=host_memory_mb,
             count=count,
             duration_seconds=duration_seconds,
             start_at=effective_start,
             mode=mode,
-            preferred_gpus=list(preferred_gpus)
-            if preferred_gpus is not None
-            else None,
+            preferred_gpus=list(preferred_gpus) if preferred_gpus is not None else None,
             excluded_gpus=list(excluded_gpus) if excluded_gpus is not None else None,
             op_id=operation_id,
             allow_queue=allow_queue,
@@ -207,6 +211,8 @@ def submit_booking(
             config,
             BookingRequest(
                 actor=actor,
+                host_cpus=host_cpus,
+                host_memory_mb=host_memory_mb,
                 count=count,
                 duration_seconds=duration_seconds,
                 start_at=effective_start,
@@ -274,6 +280,8 @@ def submit_edit(
     allow_queue: bool = False,
     operation_id: Optional[str] = None,
     advice: Optional[GpuAdvice] = None,
+    host_cpus: Optional[int] = None,
+    host_memory_mb: Optional[int] = None,
 ) -> BookingSubmission:
     generated_at = utc_now()
     ledger = store.load()
@@ -404,6 +412,8 @@ def submit_edit(
         config,
         EditRequest(
             actor=actor,
+            host_cpus=host_cpus,
+            host_memory_mb=host_memory_mb,
             reservation_id=reservation_id,
             op_id=operation_id,
             start_at=start_at,
@@ -587,6 +597,12 @@ def build_agent_context(
         "actor": {"uid": actor.uid, "username": actor.username},
         "administrator": administrator_info(config).as_dict(),
         "policy": {
+            "host_cpu_capacity": config.host_cpu_capacity,
+            "host_memory_capacity_mb": config.host_memory_capacity_mb,
+            "default_host_cpus": config.default_host_cpus,
+            "default_host_memory_mb": config.default_host_memory_mb,
+            "no_show_grace_seconds": config.no_show_grace_seconds,
+            "rootless": config.rootless,
             "gpu_count": config.gpu_count,
             "enabled_gpus": list(config.enabled_gpus),
             "disabled_gpus": list(config.disabled_gpus),
@@ -669,7 +685,10 @@ def recommend_booking(
     share_units: Optional[int] = None,
     allow_queue: bool = True,
     advice: Optional[GpuAdvice] = None,
+    host_cpus: Optional[int] = None,
+    host_memory_mb: Optional[int] = None,
 ) -> dict:
+    budget = normalize_host_budget(config, host_cpus, host_memory_mb)
     generated_at = utc_now()
     effective_start = (
         normalize_queue_start(start_at, generated_at, config.slot_minutes)
@@ -732,6 +751,7 @@ def recommend_booking(
         gpu_advice.memory_capacities_mb,
         effective_share_units,
         excluded_gpus,
+        host_budget=budget,
     )
     nearest = slot
     if slot is None and not allow_queue:
@@ -751,6 +771,7 @@ def recommend_booking(
             gpu_advice.memory_capacities_mb,
             effective_share_units,
             excluded_gpus,
+            host_budget=budget,
         )
 
     response = {
@@ -759,6 +780,7 @@ def recommend_booking(
         "generated_at": to_iso(generated_at),
         "node": stable_node_identity(),
         "request": {
+            **budget,
             "count": count,
             "duration_seconds": duration_seconds,
             "start_at": to_iso(effective_start),
@@ -1076,6 +1098,11 @@ def _public_reservation(
     mine = int(reservation.get("uid", -1)) == actor.uid
     cancellation = reservation.get("cancel_operation")
     return {
+        **{
+            key: reservation[key]
+            for key in ("host_cpus", "host_memory_mb")
+            if key in reservation
+        },
         "id": reservation.get("id"),
         "short_id": str(reservation.get("id", ""))[:8],
         "uid": reservation.get("uid"),

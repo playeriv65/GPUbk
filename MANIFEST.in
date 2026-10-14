@@ -1,5 +1,10 @@
 include CHANGELOG.md
 include LICENSE
+include NOTICE
+include AGENTS.md
+include CLAUDE.md
+include Makefile
+include uv.lock
 include README.zh-CN.md
 recursive-include docs *.md
 include SECURITY.md

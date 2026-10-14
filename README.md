@@ -1,5 +1,88 @@
 # GPUBK
 
+**This laboratory fork adds rootless shared deployment, host resource budgets,
+installable Agent Skills and cooperative Bash GPU visibility.**
+
+Based on [lzzmm/GPUBK](https://github.com/lzzmm/GPUbk), with the upstream
+reservation engine, worker and MCP interfaces retained. Part of a practical
+research-lab utilities series alongside
+[HPC Agent Kit](https://github.com/playeriv65/hpc-agent-kit).
+
+## Laboratory fork quick start
+
+Install this fork, rather than the upstream PyPI release:
+
+```bash
+uv tool install --python 3.12 'gpubk[all] @ git+https://github.com/playeriv65/GPUbk.git@main'
+bk skill install --agent codex
+# For Claude Code instead: bk skill install --agent claude
+```
+
+Skill installation writes only the selected skill directory. It does not edit
+AGENTS.md, CLAUDE.md, shell startup files or client MCP configuration. The Skill
+describes natural requests such as reserving GPU 1, checking availability,
+renewing a reservation and running an exclusive benchmark. Automatic selection
+depends on the agent client; confirm discovery in a new session.
+
+One ordinary account can host the shared broker and monitor:
+
+```bash
+bk server init --directory /absolute/shared/owner/gpubk-server \
+  --gpu-count 8 --cpus 64 --ram 256g
+bk server connect /absolute/shared/owner/gpubk-server/config.json
+bk server serve --config /absolute/shared/owner/gpubk-server/config.json
+```
+
+Choose an owner-controlled directory whose ancestors allow intended clients to
+traverse it. Keep `server serve` in a tmux window. Each user installs the CLI,
+connects to the same config and installs their Skill once. No sudo is required;
+automatic startup after host reboot is a separate administrator choice.
+
+```bash
+bk agent context --compact
+bk agent recommend 1 2h --gpu 1 --mem 24g --cpus 4 --ram 32g --compact
+bk 1 2h --gpu 1 --mem 24g --cpus 4 --ram 32g --op-id experiment-001 --json
+eval "$(bk shell init)"             # explicitly enable in the current Bash
+bk_gpu_refresh                     # refresh after a booking or release
+bk x 1 2h --gpu 1 -- python benchmark.py
+```
+
+`GPU 1` is a device index; positional `bk 1` is a GPU count. Always provide
+`--gpu 1` when a specific device was requested. Future reservations remain
+invisible until their start; expiry and service failure clear new visibility.
+Existing CUDA programs retain their inherited environment and device contexts.
+
+CPU and host RAM budgets are declarations checked atomically against the host
+calendar, including renewal. They are not cgroup limits. Rootless defaults use
+one CPU and 1 GiB RAM for omitted budgets when those capacities are enabled.
+
+The monitor can reclaim bookings after one hour of consecutive trustworthy
+evidence that the owner never started using the reserved GPUs. A living GPU
+process counts as use even at zero utilization. Missing, stale or ambiguous
+evidence retains the booking; reclamation never kills another user's process.
+
+The rootless initializer pauses periodic GPU queries during active exclusive
+windows, while retaining cached stable device identities. Pending managed jobs
+can still collect no-show evidence before launch. Paused windows cannot prove
+manual no-shows, so these reservations are retained until normal expiry.
+Use managed launches for timing and keep other diagnostic samplers separate.
+
+See [rootless deployment](docs/ROOTLESS.md), [Bash integration](docs/SHELL.md)
+and [reclamation](docs/RECLAIM.md). See [validation evidence](docs/VALIDATION.md).
+CPU-only tests cover the new features;
+real cross-UID deployment and GPU workload validation require a host acceptance
+run. No benchmark overhead claim is made from simulation.
+
+For source development:
+
+```bash
+uv sync --locked --all-extras
+uv run ruff check src tests benchmarks tools
+uv run python -m unittest discover -s tests -p 'test_*.py' < /dev/null
+```
+
+The original upstream overview and administrator deployment guide follow.
+
 **English** | [简体中文](https://github.com/lzzmm/GPUbk/blob/main/README.zh-CN.md)
 
 <p align="center">

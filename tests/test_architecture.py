@@ -1,3 +1,4 @@
+# Modified for the playeriv65 laboratory fork; see NOTICE.
 import re
 import unittest
 from pathlib import Path
@@ -49,6 +50,15 @@ class SingleSourceOfTruthTests(unittest.TestCase):
         repository = repositories[0]
         expected_path = repository.removeprefix("https://github.com/")
         expected_owner, expected_name = expected_path.split("/", 1)
+        allowed = {(expected_owner, expected_name)}
+        for field in ("Upstream", "Companion"):
+            match = re.search(
+                rf'^{field}\s*=\s*"https://github.com/([^/]+)/([^"/]+)"$',
+                pyproject,
+                re.MULTILINE,
+            )
+            if match:
+                allowed.add(match.groups())
 
         files = [
             ROOT / "README.md",
@@ -61,7 +71,7 @@ class SingleSourceOfTruthTests(unittest.TestCase):
         pattern = re.compile(r"github\.com/([^/\s]+)/([^/\s)'\"`]+)")
         for path in files:
             for owner, name in pattern.findall(path.read_text(encoding="utf-8")):
-                if owner != expected_owner or name.removesuffix(".git") != expected_name:
+                if (owner, name.split("@", 1)[0].removesuffix(".git")) not in allowed:
                     mismatches.append(f"{path.relative_to(ROOT)}: {owner}/{name}")
         self.assertEqual(mismatches, [])
 
