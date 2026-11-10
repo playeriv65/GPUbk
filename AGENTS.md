@@ -12,5 +12,5 @@
 - No-show reclamation requires trustworthy evidence and must preserve started work. Never signal another user's processes.
 - Keep periodic device sampling out of protected timing windows. Prompt refresh must not query GPU drivers.
 - Validate with synthetic devices and disposable Bash processes before requesting a real GPU acceptance run.
-- Use English for comments and new documentation. Keep this file and CLAUDE.md identical.
+- Use English for comments and new documentation.
 - Run Ruff, relevant tests, the full regression suite and package checks before publishing changes.
